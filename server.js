@@ -356,6 +356,115 @@ function buildServer() {
     }
   );
 
+  // --- Write a whole file (create or overwrite) ---
+  server.registerTool(
+    "write_file",
+    {
+      title: "Write File",
+      description: "Write full text content to a file (creates or overwrites). Use mode:'append' to add to the end.",
+      inputSchema: {
+        path: z.string().describe("File path to write."),
+        content: z.string().describe("Text content."),
+        mode: z.enum(["overwrite", "append"]).optional().describe("Default 'overwrite'."),
+      },
+    },
+    async ({ path, content, mode }) => {
+      const full = resolvePath(path);
+      if (mode === "append") {
+        const existing = await readFile(full, "utf8").catch(() => "");
+        await writeFile(full, existing + content, "utf8");
+      } else {
+        await writeFile(full, content, "utf8");
+      }
+      return { content: [{ type: "text", text: `Wrote ${full} (${content.split("\n").length} lines, mode=${mode || "overwrite"})` }] };
+    }
+  );
+
+  // --- Batch read multiple files in one call ---
+  server.registerTool(
+    "batch_read",
+    {
+      title: "Batch Read Files",
+      description: "Read several files at once. Each entry: { path, offset?, limit? }. Returns each file labeled.",
+      inputSchema: {
+        files: z.array(z.object({
+          path: z.string(),
+          offset: z.number().int().positive().optional(),
+          limit: z.number().int().positive().optional(),
+        })).min(1).describe("Files to read."),
+      },
+    },
+    async ({ files }) => {
+      const blocks = [];
+      for (const f of files) {
+        const full = resolvePath(f.path);
+        const content = await readFile(full, "utf8");
+        const lines = content.split("\n");
+        const start = f.offset ? f.offset - 1 : 0;
+        const slice = lines.slice(start, f.limit ? start + f.limit : undefined);
+        blocks.push(`===== ${f.path} (${lines.length} lines) =====\n` + slice.join("\n"));
+      }
+      return { content: [{ type: "text", text: blocks.join("\n\n") }] };
+    }
+  );
+
+  // --- Batch edit multiple files (transactional: all-or-nothing) ---
+  server.registerTool(
+    "batch_edit",
+    {
+      title: "Batch Edit Files",
+      description:
+        "Apply multiple exact-text edits across one or more files in a single call. " +
+        "All edits are validated before any file is written — if one old_text is missing or ambiguous, nothing is changed. " +
+        "Each edit: { path, old_text, new_text, replace_all? }.",
+      inputSchema: {
+        edits: z.array(z.object({
+          path: z.string(),
+          old_text: z.string().min(1),
+          new_text: z.string(),
+          replace_all: z.boolean().optional(),
+        })).min(1).describe("Edits to apply."),
+      },
+    },
+    async ({ edits }) => {
+      // Group edits by resolved path
+      const byPath = new Map();
+      for (const e of edits) {
+        const full = resolvePath(e.path);
+        if (!byPath.has(full)) byPath.set(full, []);
+        byPath.get(full).push(e);
+      }
+      const results = [];
+      // Validate + compute everything BEFORE writing (transactional)
+      const pending = new Map();
+      for (const [full, fileEdits] of byPath) {
+        let content = await readFile(full, "utf8");
+        const original = content;
+        for (const e of fileEdits) {
+          if (e.replace_all) {
+            const parts = content.split(e.old_text);
+            if (parts.length - 1 === 0) throw new Error(`old_text not found in ${full}`);
+            content = parts.join(e.new_text);
+          } else {
+            const idx = content.indexOf(e.old_text);
+            if (idx === -1) throw new Error(`old_text not found in ${full}`);
+            if (content.indexOf(e.old_text, idx + e.old_text.length) !== -1) {
+              throw new Error(`old_text is ambiguous in ${full}; make it unique or set replace_all`);
+            }
+            content = content.slice(0, idx) + e.new_text + content.slice(idx + e.old_text.length);
+          }
+          results.push(`--- ${full} ---\n${shortDiff(e.old_text, e.new_text)}`);
+        }
+        pending.set(full, { original, content });
+      }
+      // All validated: write
+      for (const [full, { content }] of pending) {
+        await writeFile(full, content, "utf8");
+      }
+      return { content: [{ type: "text", text: `Applied ${edits.length} edit(s) across ${byPath.size} file(s).\n\n` + results.join("\n") }] };
+    }
+  );
+
   return server;
 }
 

@@ -48,6 +48,15 @@ Exact string replace — the preferred way to edit code (no shell escaping neede
 ### `apply_patch`
 Apply a unified diff via `git apply` (with a `--3way` fallback). `cwd` = repo root, `patch` = diff text.
 
+### `write_file`
+Write full content to a file (`overwrite`, or `append`).
+
+### `batch_read`
+Read several files in one call. `files`: array of `{ path, offset?, limit? }`.
+
+### `batch_edit`
+Apply many exact-text edits across one or more files in a single call. **Transactional**: every `old_text` is validated before any file is written, so a missing/ambiguous match aborts the whole batch (nothing changes). Each edit: `{ path, old_text, new_text, replace_all? }`.
+
 ### Native git passthrough
 `git_status` (`-sb`), `git_diff` (`staged` + `paths` options), `git_log` (`max_count`, `revision`), `git_show` (`revision`). Each takes an optional `cwd`.
 
