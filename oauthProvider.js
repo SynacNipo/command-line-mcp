@@ -8,10 +8,10 @@ const refreshTokens = new Map();
 const TOKEN_TTL_SECONDS = 3600;
 
 function buildBaseUrl(req) {
-  // The server sits behind a TLS-terminating tunnel (cloudflared/ngrok), so the
-  // external scheme is always https even though the local request is http.
+  // When fronted by the Cloudflare Worker (or any reverse proxy), trust the
+  // forwarded headers so metadata advertises the public URL, not localhost.
   const proto = req.headers["x-forwarded-proto"] || "https";
-  const host = req.headers.host;
+  const host = req.headers["x-forwarded-host"] || req.headers.host;
   return new URL(`${proto}://${host}`);
 }
 
