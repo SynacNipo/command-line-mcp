@@ -20,15 +20,38 @@ personal, tunnel-exposed server.
 - Endpoint: `POST /mcp`
 - Health check: `GET /health`
 
-## Tool: `run_command`
+## Tools
+
+### `run_command`
+Execute a shell command. On Windows the default shell is `cmd.exe` (use `dir`, `cd`, not `ls`/`pwd`) unless you pass `shell: "powershell"`.
 
 | Parameter    | Type   | Required | Description                                                        |
 | ------------ | ------ | -------- | ------------------------------------------------------------------ |
-| `command`    | string | yes      | The shell command to run (supports pipes, redirects, built-ins).   |
-| `cwd`        | string | no       | Working directory. Defaults to the server's start directory.       |
+| `command`    | string | yes      | The shell command to run.                                          |
+| `cwd`        | string | no       | Working directory.                                                 |
 | `timeout_ms` | number | no       | Hard timeout (max 600000). Default 120000.                         |
+| `shell`      | string | no       | `"cmd"` (default) or `"powershell"`.                               |
 
-Returns `exit_code`, status (`completed` / `killed` / `timed out`), plus captured `stdout` and `stderr`.
+### `get_info`
+Returns OS, architecture, default shell (`cmd.exe` on Windows), and current working directory — call once so the client knows which shell to use.
+
+### `read_file`
+Read a text file (optional `offset`/`limit` line range). `path` is absolute or relative to cwd.
+
+### `list_files`
+List a directory. `recursive: true` walks the tree (depth-limited to 4).
+
+### `edit_file`
+Exact string replace — the preferred way to edit code (no shell escaping needed).
+`path`, `old_text`, `new_text`, optional `replace_all`. `old_text` must be unique unless `replace_all` is set. Returns a short diff.
+
+### `apply_patch`
+Apply a unified diff via `git apply` (with a `--3way` fallback). `cwd` = repo root, `patch` = diff text.
+
+### Native git passthrough
+`git_status` (`-sb`), `git_diff` (`staged` + `paths` options), `git_log` (`max_count`, `revision`), `git_show` (`revision`). Each takes an optional `cwd`.
+
+> All file paths are resolved on the host running the server — they point at **this machine**, not Claude's sandbox.
 
 ## Run locally
 
