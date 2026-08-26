@@ -1,11 +1,11 @@
 import { spawn, execSync } from "node:child_process";
-import { platform } from "node:os";
 
 const PORT = Number(process.env.PORT) || 3000;
+const isWin = process.platform === "win32";
 
 function killPort(port) {
   try {
-    if (platform === "win32") {
+    if (isWin) {
       const out = execSync(`netstat -ano | findstr :${port}`, { encoding: "utf8" });
       const pids = new Set();
       for (const line of out.split("\n")) {
@@ -26,8 +26,30 @@ function killPort(port) {
 
 killPort(PORT);
 
+const children = [];
+
+function spawnChild(cmd, args, name) {
+  const child = spawn(cmd, args, { stdio: "inherit", env: process.env });
+  child.on("exit", (code) => console.log(`[start] ${name} exited (${code})`));
+  child.on("error", (err) => console.error(`[start] ${name} error:`, err));
+  children.push(child);
+  return child;
+}
+
 setTimeout(() => {
-  const child = spawn("node", ["server.js"], { stdio: "inherit", env: process.env });
-  child.on("exit", (code) => process.exit(code ?? 0));
-  child.on("error", (err) => { console.error(err); process.exit(1); });
+  spawnChild("node", ["server.js"], "server");
+  // give the server a moment to bind before the agent tries to relay to it
+  setTimeout(() => {
+    spawnChild("node", ["agent.js"], "agent");
+  }, 1500);
 }, 600);
+
+function shutdown(signal) {
+  for (const c of children) {
+    try { c.kill(signal); } catch { /* ignore */ }
+  }
+  process.exit(0);
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
