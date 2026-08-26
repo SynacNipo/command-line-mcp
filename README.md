@@ -72,16 +72,41 @@ npm start
 
 Optional env vars: `PORT`, `CMD_TIMEOUT_MS`, `CMD_MAX_BUFFER`.
 
-## Expose it to Claude Desktop (local + tunnel)
+`npm start` runs `start.js`, which frees port 3000 (kills any process holding it)
+before launching the server, so you never hit `EADDRINUSE`.
+
+## Expose it to Claude Desktop
+
+### Option A — Cloudflare Worker (stable URL, no trycloudflare, no domain needed)
+
+A small local **agent** keeps a WebSocket open to a Cloudflare Worker, which becomes
+your stable public `*.workers.dev` MCP endpoint. The Worker only relays to your
+machine while the agent (authenticated with `PROXY_SECRET`) is connected.
+
+1. `wrangler login` (free Cloudflare account).
+2. Deploy: `wrangler deploy` → note your URL, e.g.
+   `https://command-line-mcp.<subdomain>.workers.dev`.
+3. Set the secret (same value already in your gitignored `.dev.vars`):
+   `wrangler secret put PROXY_SECRET` (paste the `PROXY_SECRET` from `.dev.vars`).
+4. Point the agent at the deployed Worker: set `WORKER_URL` in `.dev.vars` to that URL.
+5. On your machine, run both:
+   ```bash
+   npm start          # the MCP server on :3000
+   npm run agent      # connects to the Worker with the secret
+   ```
+6. In Claude Desktop: **Customize → Connectors → Add custom connector**, paste
+   `https://command-line-mcp.<subdomain>.workers.dev/mcp`.
+
+Local testing without deploying: `wrangler dev --port 8787` (Worker on :8787),
+then `npm run agent` — the agent reads `WORKER_URL` from `.dev.vars`.
+
+### Option B — cloudflared / ngrok tunnel (ephemeral URL)
 
 Claude Desktop connectors need an **HTTPS** URL, so run the server locally and tunnel it:
 
 ```bash
-# cloudflared (recommended, free, no account needed for quick tunnel)
-cloudflared tunnel --url http://localhost:3000
-
-# or ngrok
-ngrok http 3000
+cloudflared tunnel --url http://localhost:3000 --protocol http2
+# or: ngrok http 3000
 ```
 
 Copy the generated `https://…` URL and append `/mcp`, e.g.
@@ -90,7 +115,7 @@ Copy the generated `https://…` URL and append `/mcp`, e.g.
 ## Add to Claude Desktop
 
 1. Open **Customize → Connectors → Add custom connector**.
-2. Paste the tunnel URL (with `/mcp`), e.g. `https://abc-123.trycloudflare.com/mcp`.
+2. Paste the URL (with `/mcp`), e.g. the Worker URL from Option A.
 3. Name it **Command-Line**.
 4. Save. Claude discovers the OAuth metadata, registers a client, and opens a browser to
    the (auto-approving) authorize endpoint, then redirects back and is ready. No "OAuth
