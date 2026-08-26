@@ -465,6 +465,75 @@ function buildServer() {
     }
   );
 
+  // --- Pull a file from a remote URL onto the host disk ---
+  server.registerTool(
+    "pull_file",
+    {
+      title: "Pull File",
+      description:
+        "Download a file from a remote http(s) URL and save it onto the host disk (Claude's working disk). " +
+        "Use this to bring a file from the user/remote into the local workspace so it can be read or edited. " +
+        "By default it refuses to overwrite an existing destination unless overwrite:true.",
+      inputSchema: {
+        url: z.string().url().describe("Remote http(s) URL of the file to pull."),
+        destination: z.string().describe("Local path (absolute or relative to cwd) to write the file."),
+        overwrite: z.boolean().optional().describe("Replace an existing file. Default false."),
+      },
+    },
+    async ({ url, destination, overwrite }) => {
+      const dest = resolvePath(destination);
+      if (!overwrite) {
+        const exists = await stat(dest).catch(() => null);
+        if (exists) throw new Error(`Destination already exists: ${dest}. Pass overwrite:true to replace it.`);
+      }
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        throw new Error(`Pull failed: HTTP ${resp.status} ${resp.statusText} for ${url}`);
+      }
+      const buf = Buffer.from(await resp.arrayBuffer());
+      await writeFile(dest, buf);
+      return {
+        content: [
+          { type: "text", text: `Pulled ${url}\nSaved to ${dest}\nBytes: ${buf.length}` },
+        ],
+      };
+    }
+  );
+
+  // --- Push a local file back to a remote URL ---
+  server.registerTool(
+    "push_file",
+    {
+      title: "Push File",
+      description:
+        "Read a local file from the host disk and upload it to a remote http(s) URL (PUT by default) so the " +
+        "user/remote receives the modified version. Use this after editing a pulled file to push changes back. " +
+        "method defaults to PUT; set method:'POST' if the endpoint expects a POST upload.",
+      inputSchema: {
+        source: z.string().describe("Local file path to read and push."),
+        url: z.string().url().describe("Remote http(s) URL to upload the file to."),
+        method: z.enum(["PUT", "POST"]).optional().describe("HTTP method. Default 'PUT'."),
+        content_type: z.string().optional().describe("Content-Type header (e.g. 'application/json')."),
+      },
+    },
+    async ({ source, url, method, content_type }) => {
+      const src = resolvePath(source);
+      const buf = await readFile(src);
+      const headers = {};
+      if (content_type) headers["Content-Type"] = content_type;
+      const resp = await fetch(url, { method: method || "PUT", body: buf, headers });
+      const text = await resp.text().catch(() => "");
+      if (!resp.ok) {
+        throw new Error(`Push failed: HTTP ${resp.status} ${resp.statusText}\n${text}`);
+      }
+      return {
+        content: [
+          { type: "text", text: `Pushed ${src} -> ${url}\nHTTP ${resp.status} ${resp.statusText}\n${text}` },
+        ],
+      };
+    }
+  );
+
   return server;
 }
 

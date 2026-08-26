@@ -5,6 +5,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { ProxyAgent } from "undici";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -39,45 +40,63 @@ if (!WORKER_URL || !SECRET) {
 }
 
 const wsUrl = `${WORKER_URL.replace(/\/$/, "")}/agent?secret=${encodeURIComponent(SECRET)}`;
-const ws = new WebSocket(wsUrl);
+const proxy = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+const wsOptions = proxy ? { dispatcher: new ProxyAgent(proxy) } : {};
+if (proxy) console.log(`[agent] routing WebSocket via proxy ${proxy}`);
 
-ws.onopen = () => console.log(`[agent] connected to ${WORKER_URL} — relaying to ${ORIGIN}`);
-ws.onerror = (e) => console.error("[agent] socket error:", e.message || e.error || e);
-ws.onclose = () => {
-  console.log("[agent] disconnected — restart agent to reattach.");
-  setTimeout(() => process.exit(1), 500);
-};
+let heartbeat;
 
-ws.onmessage = async (event) => {
-  let msg;
-  try {
-    msg = JSON.parse(typeof event.data === "string" ? event.data : event.data.toString());
-  } catch {
-    return;
-  }
-  if (!msg.method) return; // only handle request messages
+function connect() {
+  const ws = new WebSocket(wsUrl, wsOptions);
 
-  try {
-    const headers = { ...msg.headers };
-    delete headers.host;
-    delete headers["content-length"];
-    delete headers.connection;
-    delete headers["transfer-encoding"];
-    const u = new URL(WORKER_URL);
-    headers["x-forwarded-host"] = u.host;
-    headers["x-forwarded-proto"] = "https";
+  ws.onopen = () => {
+    console.log(`[agent] connected to ${WORKER_URL} — relaying to ${ORIGIN}`);
+    heartbeat = setInterval(() => {
+      try { ws.ping(); } catch { /* ignore */ }
+    }, 25000);
+  };
 
-    const resp = await fetch(ORIGIN + msg.path, {
-      method: msg.method,
-      headers,
-      body: msg.body != null ? msg.body : undefined,
-      redirect: "manual",
-    });
-    const body = await resp.text();
-    const out = {};
-    resp.headers.forEach((v, k) => { out[k] = v; });
-    ws.send(JSON.stringify({ type: "response", id: msg.id, status: resp.status, headers: out, body }));
-  } catch (e) {
-    ws.send(JSON.stringify({ type: "response", id: msg.id, status: 502, headers: {}, body: `agent error: ${e.message}` }));
-  }
-};
+  ws.onerror = (e) => console.error("[agent] socket error:", e?.message || e?.error || e);
+
+  ws.onclose = () => {
+    clearInterval(heartbeat);
+    console.log("[agent] disconnected — retrying in 3s...");
+    setTimeout(connect, 3000);
+  };
+
+  ws.onmessage = async (event) => {
+    let msg;
+    try {
+      msg = JSON.parse(typeof event.data === "string" ? event.data : event.data.toString());
+    } catch {
+      return;
+    }
+    if (!msg.method) return; // only handle request messages (pings/keepalives ignored)
+
+    try {
+      const headers = { ...msg.headers };
+      delete headers.host;
+      delete headers["content-length"];
+      delete headers.connection;
+      delete headers["transfer-encoding"];
+      const u = new URL(WORKER_URL);
+      headers["x-forwarded-host"] = u.host;
+      headers["x-forwarded-proto"] = "https";
+
+      const resp = await fetch(ORIGIN + msg.path, {
+        method: msg.method,
+        headers,
+        body: msg.body != null ? msg.body : undefined,
+        redirect: "manual",
+      });
+      const body = await resp.text();
+      const out = {};
+      resp.headers.forEach((v, k) => { out[k] = v; });
+      ws.send(JSON.stringify({ type: "response", id: msg.id, status: resp.status, headers: out, body }));
+    } catch (e) {
+      ws.send(JSON.stringify({ type: "response", id: msg.id, status: 502, headers: {}, body: `agent error: ${e.message}` }));
+    }
+  };
+}
+
+connect();

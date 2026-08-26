@@ -8,7 +8,7 @@ class_name = "AgentHub"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["AgentHub"]
+new_sqlite_classes = ["AgentHub"]
 
 # Local dev secrets live in .dev.vars (gitignored): PROXY_SECRET, WORKER_URL
 # For production, set the secret:  wrangler secret put PROXY_SECRET
